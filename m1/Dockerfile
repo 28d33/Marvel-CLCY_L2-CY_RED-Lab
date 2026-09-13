@@ -42,5 +42,5 @@ RUN mkdir -p /run/named /var/named && chown -R named:named /run/named /var/named
 COPY entrypoint.sh fw-m1.sh fwlog.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/fw-m1.sh /usr/local/bin/fwlog.sh
 
-EXPOSE 53 80 443 8080 8443 44444
+EXPOSE 53 80 443 8080 8443
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

