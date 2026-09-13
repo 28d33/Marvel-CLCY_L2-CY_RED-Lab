@@ -1,0 +1,118 @@
+name: ipvlab
+
+services:
+  # ---------------------------------------------------------------------------
+  # Machine 1 - public-facing PING HOST / ROUTER
+  # The ONLY machine directly reachable from the attacker host network.
+  # No SSH on purpose: the attacker reaches m2 by adding a route through m1.
+  # ---------------------------------------------------------------------------
+  m1:
+    build: ./m1
+    image: ipvlab/m1
+    container_name: ipvlab-m1
+    hostname: m1
+    privileged: false
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    networks:
+      attacker_public:
+        ipv4_address: 10.10.10.2
+      public_internal:
+        ipv4_address: 10.20.20.2
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 80 && dig +short +time=1 @127.0.0.1 m1.ipvlab.lab | grep -q 10.10.10.2"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # Machine 2 - internal web host + ROUTER (behind m1). No SSH.
+  # Reachable by adding a route on the attacker: 10.20.20.0/24 via 10.10.10.2
+  # Vulnerable PHP upload -> RCE -> CAP_SETUID python3 escalation -> /root hint
+  # ---------------------------------------------------------------------------
+  m2:
+    build: ./m2
+    image: ipvlab/m2
+    container_name: ipvlab-m2
+    hostname: m2
+    privileged: false
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.rp_filter: "0"
+    networks:
+      public_internal:
+        ipv4_address: 10.20.20.3
+      internal_vulnerable:
+        ipv4_address: 10.30.30.2
+    depends_on:
+      m1:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/hc.sh"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Machine 3 - vulnerable application host (behind m2). No published ports.
+  #   DVWA :80 (Apache/PHP + MariaDB), SSH :22 = the ONLY ssh in the lab
+  #   (brute-force target for crunch+hydra, then a local tunnel to DVWA)
+  # ---------------------------------------------------------------------------
+  m3:
+    build: ./m3
+    image: ipvlab/m3
+    container_name: ipvlab-m3
+    hostname: m3
+    privileged: false
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    sysctls:
+      net.ipv4.ip_forward: "0"
+      net.ipv4.conf.all.rp_filter: "0"
+    environment:
+      - DEFAULT_SECURITY_LEVEL=low   # DVWA initial security level
+      - DB_SERVER=127.0.0.1
+      - DB_DATABASE=dvwa
+      - DB_USER=dvwa
+      - DB_PASSWORD=p@ssw0rd
+    networks:
+      internal_vulnerable:
+        ipv4_address: 10.30.30.3
+    depends_on:
+      m2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "/usr/local/bin/hc.sh"]
+      interval: 30s
+      timeout: 15s
+      retries: 20
+      start_period: 180s
+
+networks:
+  attacker_public:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
+  public_internal:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.20.20.0/24
+  internal_vulnerable:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.30.30.0/24

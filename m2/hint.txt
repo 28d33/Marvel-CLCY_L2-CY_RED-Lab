@@ -1,0 +1,7 @@
+m3 = 10.30.30.3  (system console on internal_vulnerable)
+
+ssh user : marvel
+ssh pass : 5 characters, charset {abcde12345!@#$%}
+
+Brute it with crunch + hydra on your own machine, then use the
+local tunnel to reach the application on m3:80 (DVWA).
